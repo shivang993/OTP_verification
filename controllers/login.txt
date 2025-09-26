@@ -1,0 +1,34 @@
+import ErrorHandler from "../middleware/error.js";
+import { User } from "../models/userModel.js";
+import { sendToken } from "../utils/sendToken.js";
+import catchAsyncError from "../middleware/catchAsyncError.js";
+
+export const login = catchAsyncError(async (req, res, next) => {
+  console.log("Login request body:", req.body); // Debug log
+
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return next(new ErrorHandler("Please enter email and password", 400));
+  }
+
+  // Fetch user with password
+  const user = await User.findOne({ email, accountVerified: true }).select("+password");
+  console.log("DB user:", user);
+
+  if (!user) {
+    return next(new ErrorHandler("Invalid email or password", 401));
+  }
+
+  // Compare password
+  const isPasswordMatched = await user.comparePassword(password);
+  console.log("Password matched?", isPasswordMatched);
+
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Invalid email or password", 400));
+  }
+
+  sendToken(user, 200, "User logged in successfully", res);
+});
+
+export default login;

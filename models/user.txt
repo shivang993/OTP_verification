@@ -1,0 +1,149 @@
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import isEmail from "validator/lib/isEmail";
+
+
+const userSchema = new userSchema({
+    user:{
+        type:String,
+        required:true,
+        trim:true
+    },
+        email:{
+        type:String,
+        required:true,
+        trim:true
+    },
+        password:{
+        type:String,
+        required:true,
+    
+    },
+    accountVerified:{
+        type:Boolean,
+        default:false,
+    },
+    verificationCode:{
+        type:Number,
+        select:false,
+    },
+    verificationCodeExpire:{
+        type:Number,
+        select:false,
+    },
+    createdAt:{
+        type:Date,
+        default:Date.now
+    }
+
+    userSchema.pre("save",async()=>{
+        if(!this.isModified(password) return next())
+        const this.password = await bcrypt.hash("password",10)
+        cnsole.log(this.password)
+    })
+
+    userSchema.methods.conparePassword = async(enterPassword)=>{
+      return await bcrypt.compare(enteredPassword,this.password)
+    }
+
+})
+
+
+this.generateVerificationCode = async(otp)=>{
+    const otp = Math.floor(100000 + Math.random() * 900000)
+    this.verificationCode= otp;
+    this.verificationCodeExpire = Date.now() * 10 *60*1000
+    return otp;
+}
+
+
+
+
+
+===================================================================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+import mongoose from "mongoose"
+import bcrypt from "bcrypt"
+import jwt from "jsonwebtoken"
+
+
+const userSchema = new userSchema{
+    name:{
+        type:String,
+        required:true,
+        trim:true
+    },
+      email:{
+        type:String,
+        required:true,
+        trim:true
+    },
+    password:{
+        type:String,
+        required:true,
+        trim:false
+    },
+    accountVerified:{
+        type:Boolean,
+        default:false
+    },
+    verificationCode:{
+        type:number,
+        default:null
+    },
+    verificationCodeExpire:{
+        type:Date,
+        default:Date.now
+    },
+
+
+
+
+
+
+
+    userSchema.pre("save",async()=>{
+        is(!password.isModified) return next();
+       const this.password = await bcrypt.hash(password,10)
+        console.log(this.password)
+        next();
+    })
+    
+
+    userSchema.methods,comparePassword=(async(enteredPassword)=>{
+        return await bcrypt.compare(enteredPassword,this.password)
+    })
+ userSchema.generateVerificationCode = async(otp)=>{
+    otp = Math.floor(100000 + Math.random()+900000)
+    this.verificationCode = otp;
+    const verificationCodeExpire = Date.now()*10*60+1000;
+    return otp;
+
+ }
+  
+
+
+  userSchema.methods.generateToken = ()=>{
+    return jwt.sign({id:this_.id}),process.env.JWT_SECRET_KEY,{
+   expiresIn : "7d"
+    }
+    
+  }
+
+
+
+
+}

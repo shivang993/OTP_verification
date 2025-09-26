@@ -1,0 +1,1049 @@
+
+
+import ErrorHandler from "../middleware/error.js";
+import { User } from "../models/userModel.js";
+import { sendToken } from "../utils/sendToken.js";
+import catchAsyncError from "../middleware/catchAsyncError.js";
+import sendEmail from "../utils/sendEmail.js";
+// import { errorMiddleware } from "../middleware/error.js";
+
+
+
+const register = catchAsyncError(async (req, res, next) => {
+  try {
+    const { user, email, password, verificationMethod, phone } = req.body;
+
+    // Validate required fields
+    if (!user || !email || !password || !verificationMethod || !phone) {
+      // return next(new ErrorHandler("Please enter all fields", 400));
+      return next(new ErrorHandler("Please enter all fields", 400));
+
+    }
+
+    // Validate phone format
+    if (!/^\+91\d{10}$/.test(phone)) {
+      return next(new ErrorHandler("Invalid Phone Number", 400));
+    }
+
+    // Check existing verified user
+    const existingUser = await User.findOne({
+      $or: [{ email, accountVerified: true }, { phone, accountVerified: true }]
+    });
+    if (existingUser) {
+      return next(new ErrorHandler("Phone or Email already exists", 409));
+    }
+
+    // Limit registration attempts
+    const registrationAttempts = await User.countDocuments({
+      $or: [{ email, accountVerified: false }, { phone, accountVerified: false }]
+    });
+    if (registrationAttempts > 3) {
+      return next(
+        new ErrorHandler(
+          "You have exceeded the maximum number of attempts. Please try again later.",
+          400
+        )
+      );
+    }
+
+    // Create new user
+    const newUser = await User.create({ user, email, phone, password });
+    const verificationCode = await newUser.generateVerificationCode();
+    await newUser.save();
+
+    // Send verification code
+    await sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res);
+
+  } catch (error) {
+    console.error("Register error:", error);
+    next(error); // Send to your global error handler
+  }
+});
+
+async function sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res) {
+  try {
+    if (verificationMethod === "email") {
+      console.log("Email verification selected");
+
+      const message = generateEmailTemplate(verificationCode);
+      console.log("Email message:", message);
+
+      // Make sure sendEmail is properly awaited
+      await sendEmail({
+        email,
+        subject: "Your Verification Code",
+        message
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Verification email successfully sent to ${email}`
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification method"
+      });
+    }
+  } catch (error) {
+    console.error("Email sending error:", error); // <-- Logs actual error
+    return res.status(500).json({
+      success: false,
+      message: `Failed to send verification code: ${error.message}`
+    });
+  }
+}
+
+function generateEmailTemplate(verificationCode) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;">
+      <h2 style="color: #4CAF50; text-align: center;">Verification Code</h2>
+      <p style="font-size: 16px; color: #333;">Dear User,</p>
+      <p style="font-size: 16px; color: #333;">Your verification code is:</p>
+      <div style="text-align: center; margin: 20px 0;">
+        <span style="display: inline-block; font-size: 24px; font-weight: bold; color: #4CAF50; padding: 10px 20px; border: 1px solid #4CAF50; border-radius: 5px; background-color: #e8f5e9;">
+          ${verificationCode}
+        </span>
+      </div>
+      <p style="font-size: 16px; color: #333;">Please use this code to verify your email address. The code will expire in 10 minutes.</p>
+      <p style="font-size: 16px; color: #333;">If you did not request this, please ignore this email.</p>
+      <footer style="margin-top: 20px; text-align: center; font-size: 14px; color: #999;">
+        <p>Thank you,<br>Your Company Team</p>
+        <p style="font-size: 12px; color: #aaa;">This is an automated message. Please do not reply to this email.</p>
+      </footer>
+    </div>
+  `;
+}
+
+
+
+ const verifyOTP = catchAsyncError(async (req, res, next) => {
+  const { email, otp, phone } = req.body;
+
+
+  const phoneRegex = /^\+91\d{10}$/;
+  if (!phoneRegex.test(phone)) {
+    return next(new ErrorHandler("Invalid Phone Number", 400));
+  }
+  //  if(!validatePhoneNumber(phone)){
+  //   return next(new ErrorHandler("Invalid Phone Number", 400));
+  //  }
+
+  try {
+  //     const userAllEntries = await User.find({
+  //   $or: [
+  //     { email, accountVerified: false },
+  //     { phone, accountVerified: false }
+  //   ]
+  // })
+  // // .select('+verificationCode +verificationCodeExpire') 
+  // .sort({ createdAt: -1 });
+const userAllEntries = await User.find({
+  $or: [
+    { email, accountVerified: false },
+    { phone, accountVerified: false }
+  ]
+})
+.select('+verificationCode +verificationCodeExpire') // ✅ Add this back
+.sort({ createdAt: -1 });
+
+
+
+  if (!userAllEntries || userAllEntries.length === 0) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+
+  let user;
+
+  // ✅ Keep the latest unverified user and remove the rest
+  if (userAllEntries.length > 1) {
+    user = userAllEntries[0];
+
+    await User.deleteMany({
+      _id: { $ne: user._id },
+      $or: [
+        { email, accountVerified: false },
+        { phone, accountVerified: false }
+      ]
+    });
+  } else {
+    user = userAllEntries[0];
+  }
+
+  // ✅ Check if OTP matches
+  if (user.verificationCode !== Number(otp)) {
+    return next(new ErrorHandler("Invalid OTP", 400));
+  }
+
+  // ✅ Check if OTP has expired
+  const currentTime = Date.now();
+  const verificationCodeExpire = new Date(user.verificationCodeExpire).getTime();
+
+  if (currentTime > verificationCodeExpire) {
+    return next(new ErrorHandler("OTP expired", 400));
+  }
+
+  // ✅ Mark user as verified
+  user.accountVerified = true;
+  user.verificationCode = null;
+  user.verificationCodeExpire = null;
+
+  await user.save({ validateModifiedOnly: true });
+
+  // ✅ Send auth token
+  sendToken(user, 200, "Account verified successfully", res);
+}catch (error) {
+           return next(new ErrorHandler("Internal Server error", 500));
+  }
+
+
+})
+export default register;
+// export {verifyOTP}
+
+
+
+
+
+
+
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++=
+
+
+
+
+
+
+import ErrorHandler from "../middleware/error.js";
+import { User } from "../models/userModel.js";
+import { sendToken } from "../utils/sendToken.js";
+import catchAsyncError from "../middleware/catchAsyncError.js";
+import sendEmail from "../utils/sendEmail.js";
+import { validatePhoneNumber } from "../utils/validatePhoneNumber.js";
+
+import validator from "validator";
+
+
+
+
+
+
+const register = (async (req, res, next) => {
+  try {
+    const { user, email, password, verificationMethod, phone } = req.body;
+
+    // Validate required fields
+    if (!user || !email || !password || !verificationMethod || !phone) {
+      // return next(new ErrorHandler("Please enter all fields", 400));
+      return next(new ErrorHandler("Please enter all fields", 400));
+
+    }
+
+    // Validate phone format
+    if (!/^\+91\d{10}$/.test(phone)) {
+      return next(new ErrorHandler("Invalid Phone Number", 400));
+    }
+
+    // Check existing verified user
+    const existingUser = await User.findOne({
+      $or: [{ email, accountVerified: true }, { phone, accountVerified: true }]
+    });
+    if (existingUser) {
+      return next(new ErrorHandler("Phone or Email already exists", 409));
+    }
+
+    // Limit registration attempts
+    const registrationAttempts = await User.countDocuments({
+      $or: [{ email, accountVerified: false }, { phone, accountVerified: false }]
+    });
+    if (registrationAttempts > 3) {
+      return next(
+        new ErrorHandler(
+          "You have exceeded the maximum number of attempts. Please try again later.",
+          400
+        )
+      );
+    }
+
+    // Create new user
+    const newUser = await User.create({ user, email, phone, password });
+    const verificationCode = await newUser.generateVerificationCode();
+    await newUser.save();
+
+    // Send verification code
+    await sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res);
+
+  } catch (error) {
+    console.error("Register error:", error);
+    next(error); // Send to your global error handler
+  }
+});
+
+async function sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res) {
+  try {
+    if (verificationMethod === "email") {
+      console.log("Email verification selected");
+
+      const message = generateEmailTemplate(verificationCode);
+      console.log("Email message:", message);
+
+      // Make sure sendEmail is properly awaited
+      await sendEmail({
+        email,
+        subject: "Your Verification Code",
+        message
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Verification email successfully sent to ${email}`
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification method"
+      });
+    }
+  } catch (error) {
+    console.error("Email sending error:", error); // <-- Logs actual error
+    return res.status(500).json({
+      success: false,
+      message: `Failed to send verification code: ${error.message}`
+    });
+  }
+}
+
+function generateEmailTemplate(verificationCode) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;">
+      <h2 style="color: #4CAF50; text-align: center;">Verification Code</h2>
+      <p style="font-size: 16px; color: #333;">Dear User,</p>
+      <p style="font-size: 16px; color: #333;">Your verification code is:</p>
+      <div style="text-align: center; margin: 20px 0;">
+        <span style="display: inline-block; font-size: 24px; font-weight: bold; color: #4CAF50; padding: 10px 20px; border: 1px solid #4CAF50; border-radius: 5px; background-color: #e8f5e9;">
+          ${verificationCode}
+        </span>
+      </div>
+      <p style="font-size: 16px; color: #333;">Please use this code to verify your email address. The code will expire in 10 minutes.</p>
+      <p style="font-size: 16px; color: #333;">If you did not request this, please ignore this email.</p>
+      <footer style="margin-top: 20px; text-align: center; font-size: 14px; color: #999;">
+        <p>Thank you,<br/>Your Company Team</p>
+        <p style="font-size: 12px; color: #aaa;">This is an automated message. Please do not reply to this email.</p>
+      </footer>
+    </div>
+  `;
+}
+
+
+
+//  const verifyOTP = (async (req, res, next) => {
+//   const { email, otp, phone } = req.body;
+
+
+//   const phoneRegex = /^\+91\d{10}$/;
+//   if (!phoneRegex.test(phone)) {
+//     return next(new ErrorHandler("Invalid Phone Number", 400));
+//   }
+//    if(!validatePhoneNumber(phone)){
+//     return next(new ErrorHandler("Invalid Phone Number", 400));
+//    } 
+
+//   try {
+//   //     const userAllEntries = await User.find({
+//   //   $or: [
+//   //     { email, accountVerified: false },
+//   //     { phone, accountVerified: false }
+//   //   ]
+//   // })
+//   // // .select('+verificationCode +verificationCodeExpire') 
+//   // .sort({ createdAt: -1 });
+// const userAllEntries = await User.find({
+//   $or: [
+//     { email, accountVerified: false },
+//     { phone, accountVerified: false }
+//   ]
+// })
+// .select('+verificationCode +verificationCodeExpire') // ✅ Add this back
+// .sort({ createdAt: -1 });
+
+
+
+//   if (!userAllEntries || userAllEntries.length === 0) {
+//     return next(new ErrorHandler("User not found", 404));
+//   }
+
+//   let user;
+
+//   // ✅ Keep the latest unverified user and remove the rest
+//   if (userAllEntries.length > 1) {
+//     user = userAllEntries[0];
+
+//     await User.deleteMany({
+//       _id: { $ne: user._id },
+//       $or: [
+//         { phone, accountVerified: false },
+//         { email, accountVerified: false }
+//       ]
+//     });
+//   } else {
+//     user = userAllEntries[0];
+//   }
+
+//   // ✅ Check if OTP matches
+//   if (user.verificationCode !== Number(otp)) {
+//     return next(new ErrorHandler("Invalid OTP", 400));
+//   }
+
+//   // ✅ Check if OTP has expired
+//   const currentTime = Date.now();
+//   const verificationCodeExpire = new Date(user.verificationCodeExpire).getTime();
+//   console.log(currentTime);
+//   console.log(verificationCodeExpire);
+
+
+
+//   if (currentTime > verificationCodeExpire) {
+//     return next(new ErrorHandler("OTP expired", 400));
+//   }
+
+//   // ✅ Mark user as verified
+//   user.accountVerified = true;
+//   user.verificationCode = null;
+//   user.verificationCodeExpire = null;
+
+//   await user.save({ validateModifiedOnly: true });
+
+//   // ✅ Send auth token
+//   sendToken(user, 200, "Account verified successfully", res);
+// }catch (error) {
+//           return next(new ErrorHandler("Internal Server error", 500));
+//   }
+
+
+// });
+// export default register;
+const verifyOTP = (async (req, res, next) => {
+  const { email,phone,otp } = req.body;
+
+  const phoneRegex = /^\+91\d{10}$/;
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid Phone Number"
+    });
+  }
+if (!validator.isMobilePhone(phone, "any")) {
+  return next(new ErrorHandler("Invalid Phone Number", 400));
+}
+
+  try {
+    const userAllEntries = await User.find({
+      $or: [
+        { email, accountVerified: false },
+        { phone, accountVerified: false }
+      ]
+    })
+    .select('+verificationCode +verificationCodeExpire')
+    .sort({ createdAt: -1 });
+
+    if (!userAllEntries || userAllEntries.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    let user;
+
+    if (userAllEntries.length > 1) {
+      user = userAllEntries[0];
+
+      await User.deleteMany({
+        _id: { $ne: user._id },
+        $or: [
+          { phone, accountVerified: false },
+          { email, accountVerified: false }
+        ]
+      });
+    } else {
+      user = userAllEntries[0];
+    }
+            // let you = Number(otp);
+        
+    if (String(user.verificationCode) !== String(otp)) {
+       return next(new ErrorHandler("Invalid OTP", 400));
+    }
+
+    const currentTime = Date.now();
+    const verificationCodeExpire = new Date(user.verificationCodeExpire).getTime().toLocaleString();
+    console.log(currentTime);
+    console.log(verificationCodeExpire);
+
+    if (currentTime > verificationCodeExpire) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired"
+      });
+    }
+
+    user.accountVerified = true;
+    user.verificationCode = null;
+    user.verificationCodeExpire = null;
+
+    await user.save({ validateModifiedOnly: true });
+
+    await sendToken(user, 200, "Account verified successfully", res);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server error"
+    });
+  }
+});
+export {verifyOTP};
+export default register;
+
+
+
+// export const login = catchAsyncError(async (req, res, next) => {
+//   // const { email, password } = req.body;
+
+//   // if (!email || !password ) {
+//   //   return next(new ErrorHandler("Enter your email or password", 400));
+//   // }
+//   // const user = await User.findOne({email,accountVerified:true}).select("+password"); 
+//   // if (!user) {
+//   //   return next(new ErrorHandler("Invalid email or password", 400));
+//   // }
+
+
+
+//   const { user, email, password } = req.body;
+
+// if (!user || !email || !password) {
+//   // return res.status(400).json({
+//   //   success: false,
+//   //   message: "Please enter all fields",
+//   // });
+//   return next(new ErrorHandler("Please enter all required fields user, email, password", 400));
+// }
+
+
+//   const isPasswordMatched = await user.comparePassword(password);
+//   if (!isPasswordMatched) {
+//     return next(new ErrorHandler("Invalid email or password", 400));
+//   }
+//   sendToken(user, 200, `User logged in successfully`, res);
+// })
+
+
+export const login = catchAsyncError(async (req, res, next) => {
+
+  const { email, password } = req.body;
+
+  // ✅ Check required fields
+  if (!email || !password) {
+    return next(new ErrorHandler("Please enter email and password", 400));
+  }
+
+  // ✅ Find user by email & ensure account is verified
+  const user = await User.findOne({ email, accountVerified: true }).select("+password");
+  if (!user) {
+    return next(new ErrorHandler("Invalid email or password", 400));
+  }
+
+  // ✅ Compare password
+  const isPasswordMatched = await user.comparePassword(password);
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Invalid email or password", 400));
+  }
+
+  // ✅ Send JWT token
+  sendToken(user, 200, "User logged in successfully", res);
+});
+
+
+
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+
+
+
+// 
+
+
+import ErrorHandler from "../middleware/error.js";
+import { User } from "../models/userModel.js";
+import { sendToken } from "../utils/sendToken.js";
+import catchAsyncError from "../middleware/catchAsyncError.js";
+import sendEmail from "../utils/sendEmail.js";
+import { validatePhoneNumber } from "../utils/validatePhoneNumber.js";
+
+import validator from "validator";
+
+
+
+
+
+
+const register = (async (req, res, next) => {
+  try {
+    const { user, email, password, verificationMethod, phone } = req.body;
+
+    // Validate required fields
+    if (!user || !email || !password || !verificationMethod || !phone) {
+      // return next(new ErrorHandler("Please enter all fields", 400));
+      return next(new ErrorHandler("Please enter all fields", 400));
+
+    }
+
+    // Validate phone format
+    if (!/^\+91\d{10}$/.test(phone)) {
+      return next(new ErrorHandler("Invalid Phone Number", 400));
+    }
+
+    // Check existing verified user
+    const existingUser = await User.findOne({
+      $or: [{ email, accountVerified: true }, { phone, accountVerified: true }]
+    });
+    if (existingUser) {
+      return next(new ErrorHandler("Phone or Email already exists", 409));
+    }
+
+    // Limit registration attempts
+    const registrationAttempts = await User.countDocuments({
+      $or: [{ email, accountVerified: false }, { phone, accountVerified: false }]
+    });
+    if (registrationAttempts > 3) {
+      return next(
+        new ErrorHandler(
+          "You have exceeded the maximum number of attempts. Please try again later.",
+          400
+        )
+      );
+    }
+
+    // Create new user
+    const newUser = await User.create({ user, email, phone, password });
+    const verificationCode = await newUser.generateVerificationCode();
+    await newUser.save();
+
+    // Send verification code
+    await sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res);
+
+  } catch (error) {
+    console.error("Register error:", error);
+    next(error); // Send to your global error handler
+  }
+});
+
+async function sendVerificationCode(verificationMethod, verificationCode, user, email, phone, res) {
+  try {
+    if (verificationMethod === "email") {
+      console.log("Email verification selected");
+
+      const message = generateEmailTemplate(verificationCode);
+      console.log("Email message:", message);
+
+      // Make sure sendEmail is properly awaited
+      await sendEmail({
+        email,
+        subject: "Your Verification Code",
+        message
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Verification email successfully sent to ${email}`
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification method"
+      });
+    }
+  } catch (error) {
+    console.error("Email sending error:", error); // <-- Logs actual error
+    return res.status(500).json({
+      success: false,
+      message: `Failed to send verification code: ${error.message}`
+    });
+  }
+}
+
+function generateEmailTemplate(verificationCode) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;">
+      <h2 style="color: #4CAF50; text-align: center;">Verification Code</h2>
+      <p style="font-size: 16px; color: #333;">Dear User,</p>
+      <p style="font-size: 16px; color: #333;">Your verification code is:</p>
+      <div style="text-align: center; margin: 20px 0;">
+        <span style="display: inline-block; font-size: 24px; font-weight: bold; color: #4CAF50; padding: 10px 20px; border: 1px solid #4CAF50; border-radius: 5px; background-color: #e8f5e9;">
+          ${verificationCode}
+        </span>
+      </div>
+      <p style="font-size: 16px; color: #333;">Please use this code to verify your email address. The code will expire in 10 minutes.</p>
+      <p style="font-size: 16px; color: #333;">If you did not request this, please ignore this email.</p>
+      <footer style="margin-top: 20px; text-align: center; font-size: 14px; color: #999;">
+        <p>Thank you,<br/>Your Company Team</p>
+        <p style="font-size: 12px; color: #aaa;">This is an automated message. Please do not reply to this email.</p>
+      </footer>
+    </div>
+  `;
+}
+
+
+
+//  const verifyOTP = (async (req, res, next) => {
+//   const { email, otp, phone } = req.body;
+
+
+//   const phoneRegex = /^\+91\d{10}$/;
+//   if (!phoneRegex.test(phone)) {
+//     return next(new ErrorHandler("Invalid Phone Number", 400));
+//   }
+//    if(!validatePhoneNumber(phone)){
+//     return next(new ErrorHandler("Invalid Phone Number", 400));
+//    } 
+
+//   try {
+//   //     const userAllEntries = await User.find({
+//   //   $or: [
+//   //     { email, accountVerified: false },
+//   //     { phone, accountVerified: false }
+//   //   ]
+//   // })
+//   // // .select('+verificationCode +verificationCodeExpire') 
+//   // .sort({ createdAt: -1 });
+// const userAllEntries = await User.find({
+//   $or: [
+//     { email, accountVerified: false },
+//     { phone, accountVerified: false }
+//   ]
+// })
+// .select('+verificationCode +verificationCodeExpire') // ✅ Add this back
+// .sort({ createdAt: -1 });
+
+
+
+//   if (!userAllEntries || userAllEntries.length === 0) {
+//     return next(new ErrorHandler("User not found", 404));
+//   }
+
+//   let user;
+
+//   // ✅ Keep the latest unverified user and remove the rest
+//   if (userAllEntries.length > 1) {
+//     user = userAllEntries[0];
+
+//     await User.deleteMany({
+//       _id: { $ne: user._id },
+//       $or: [
+//         { phone, accountVerified: false },
+//         { email, accountVerified: false }
+//       ]
+//     });
+//   } else {
+//     user = userAllEntries[0];
+//   }
+
+//   // ✅ Check if OTP matches
+//   if (user.verificationCode !== Number(otp)) {
+//     return next(new ErrorHandler("Invalid OTP", 400));
+//   }
+
+//   // ✅ Check if OTP has expired
+//   const currentTime = Date.now();
+//   const verificationCodeExpire = new Date(user.verificationCodeExpire).getTime();
+//   console.log(currentTime);
+//   console.log(verificationCodeExpire);
+
+
+
+//   if (currentTime > verificationCodeExpire) {
+//     return next(new ErrorHandler("OTP expired", 400));
+//   }
+
+//   // ✅ Mark user as verified
+//   user.accountVerified = true;
+//   user.verificationCode = null;
+//   user.verificationCodeExpire = null;
+
+//   await user.save({ validateModifiedOnly: true });
+
+//   // ✅ Send auth token
+//   sendToken(user, 200, "Account verified successfully", res);
+// }catch (error) {
+//           return next(new ErrorHandler("Internal Server error", 500));
+//   }
+
+
+// });
+// export default register;
+const verifyOTP = (async (req, res, next) => {
+  const { email,phone,otp } = req.body;
+
+  const phoneRegex = /^\+91\d{10}$/;
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid Phone Number"
+    });
+  }
+if (!validator.isMobilePhone(phone, "any")) {
+  return next(new ErrorHandler("Invalid Phone Number", 400));
+}
+
+  try {
+    const userAllEntries = await User.find({
+      $or: [
+        { email, accountVerified: false },
+        { phone, accountVerified: false }
+      ]
+    })
+    .select('+verificationCode +verificationCodeExpire')
+    .sort({ createdAt: -1 });
+
+    if (!userAllEntries || userAllEntries.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    let user;
+
+    if (userAllEntries.length > 1) {
+      user = userAllEntries[0];
+
+      await User.deleteMany({
+        _id: { $ne: user._id },
+        $or: [
+          { phone, accountVerified: false },
+          { email, accountVerified: false }
+        ]
+      });
+    } else {
+      user = userAllEntries[0];
+    }
+            // let you = Number(otp);
+        
+    if (String(user.verificationCode) !== String(otp)) {
+       return next(new ErrorHandler("Invalid OTP", 400));
+    }
+
+    const currentTime = Date.now();
+    const verificationCodeExpire = new Date(user.verificationCodeExpire).getTime().toLocaleString();
+    console.log(currentTime);
+    console.log(verificationCodeExpire);
+
+    if (currentTime > verificationCodeExpire) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired"
+      });
+    }
+
+    user.accountVerified = true;
+    user.verificationCode = null;
+    user.verificationCodeExpire = null;
+
+    await user.save({ validateModifiedOnly: true });
+
+    await sendToken(user, 200, "Account verified successfully", res);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server error"
+    });
+  }
+});
+export {verifyOTP};
+export default register;
+
+
+
+// export const login = catchAsyncError(async (req, res, next) => {
+//   // const { email, password } = req.body;
+
+//   // if (!email || !password ) {
+//   //   return next(new ErrorHandler("Enter your email or password", 400));
+//   // }
+//   // const user = await User.findOne({email,accountVerified:true}).select("+password"); 
+//   // if (!user) {
+//   //   return next(new ErrorHandler("Invalid email or password", 400));
+//   // }
+
+
+
+//   const { user, email, password } = req.body;
+
+// if (!user || !email || !password) {
+//   // return res.status(400).json({
+//   //   success: false,
+//   //   message: "Please enter all fields",
+//   // });
+//   return next(new ErrorHandler("Please enter all required fields user, email, password", 400));
+// }
+
+
+//   const isPasswordMatched = await user.comparePassword(password);
+//   if (!isPasswordMatched) {
+//     return next(new ErrorHandler("Invalid email or password", 400));
+//   }
+//   sendToken(user, 200, `User logged in successfully`, res);
+// })
+// console.log("Login request body:", req.body);
+
+
+
+
+export const login =(async (req, res, next) => {
+console.log("Login request body:", req.body); // Debug log
+  const { email, password } = req.body;
+
+  
+  if (!email || !password) {
+    return next(new ErrorHandler("Please enter email and password", 400));
+  }
+
+
+  // const user = await User.findOne({ email, accountVerified: true }).select("+password");
+  const user = await User.findOne({ email, accountVerified: true }).select("+password");
+    console.log("DB user:", user);
+
+  if (!user) {
+    return next(new ErrorHandler("Invalid email or password", 401));
+  }
+
+  // const isPasswordMatched = await user.comparePassword(password);
+  const isPasswordMatched = await user.comparePassword(password);
+    console.log("Password matched?", isPasswordMatched);
+
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Invalid email or password", 400));
+  }
+
+  sendToken(user, 200, "User logged in successfully", res);
+});
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++=
+
+
+
+
+
+
+
+
+import { User } from "../models/userModel.js";
+import ErrorHandler from "../middleware/error.js";
+import sendEmail from "../utils/sendEmail.js";
+import { sendToken } from "../utils/sendToken.js";
+import validator from "validator";
+
+const register = async (req, res, next) => {
+  try {
+    const { user, email, password, phone, verificationMethod } = req.body;
+
+    if (!user || !email || !password || !phone || !verificationMethod) {
+      return next(new ErrorHandler("Please enter all fields", 400));
+    }
+
+    if (!/^\+91\d{10}$/.test(phone)) {
+      return next(new ErrorHandler("Invalid Phone Number", 400));
+    }
+
+    // Remove old unverified users with same email/phone
+    await User.deleteMany({
+      $or: [{ email }, { phone }],
+      accountVerified: false
+    });
+
+    // Check if a verified user already exists
+    const existingUser = await User.findOne({
+      $or: [{ email }, { phone }],
+      accountVerified: true
+    });
+    if (existingUser) {
+      return next(new ErrorHandler("Phone or Email already exists", 409));
+    }
+
+    const newUser = await User.create({ user, email, phone, password });
+    const otp = newUser.generateVerificationCode();
+    await newUser.save();
+
+    if (verificationMethod === "email") {
+      const message = `Your OTP is: ${otp}. It expires in 10 minutes.`;
+      await sendEmail({ email, subject: "Verification OTP", message });
+      return res.status(200).json({
+        success: true,
+        message: `OTP sent to ${email}`,
+      });
+    } else {
+      return next(new ErrorHandler("Invalid verification method", 400));
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+const verifyOTP = async (req, res, next) => {
+  const { email, phone, otp } = req.body;
+
+  try {
+    const users = await User.find({
+      $or: [{ email, accountVerified: false }, { phone, accountVerified: false }],
+    })
+      .select("+verificationCode +verificationCodeExpire")
+      .sort({ createdAt: -1 });
+
+    if (!users.length) {
+      return next(new ErrorHandler("User not found", 404));
+    }
+
+    const user = users[0];
+
+    if (String(user.verificationCode) !== String(otp)) {
+      return next(new ErrorHandler("Invalid OTP", 400));
+    }
+
+    if (Date.now() > user.verificationCodeExpire.getTime()) {
+      return next(new ErrorHandler("OTP expired", 400));
+    }
+
+    user.accountVerified = true;
+    user.verificationCode = null;
+    user.verificationCodeExpire = null;
+    await user.save();
+
+    sendToken(user, 200, "Account verified successfully", res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const login = async (req, res, next) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return next(new ErrorHandler("Please enter email and password", 400));
+  }
+
+  const user = await User.findOne({ email, accountVerified: true }).select("+password");
+  if (!user) return next(new ErrorHandler("Invalid email or password", 401));
+
+  const isMatch = await user.comparePassword(password);
+  if (!isMatch) return next(new ErrorHandler("Invalid email or password", 401));
+
+  sendToken(user, 200, "User logged in successfully", res);
+};
+
+export { verifyOTP, login };
+export default register;

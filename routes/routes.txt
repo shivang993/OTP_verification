@@ -1,0 +1,32 @@
+import express from "express";
+// import register, { login, verifyOTP } from "./controllers/userController.js";
+// Correct
+import register, { verifyOTP} from "../controllers/userController.js";
+
+// const router = express.Router();
+
+import {login} from "../controllers/userController.js";
+
+// import {logout} from "../controllers/userController.js";
+
+const router = express.Router();
+router.post("/test", (req, res) => {
+  console.log("REQ BODY:", req.body);
+  res.json({ success: true, body: req.body });
+});
+
+router.route("/register").post(register);
+// router.route('/otp-verification').post(verifyOTP);
+router.post("/otp-verification", verifyOTP);
+router.post("/login", login);
+
+
+
+
+
+export default router;
+
+
+
+
+

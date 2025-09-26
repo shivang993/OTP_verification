@@ -1,0 +1,260 @@
+// 
+
+
+
+
+
+
+
+
+
+import mongoose from "mongoose";
+import bcrypt from "bcrypt";
+// import {User} from "../models/userModel.js"
+import register from "../controllers/userController.js" 
+import jwt from "jsonwebtoken";
+
+const userSchema = new mongoose.Schema(
+  {
+  user: {
+    type: String,
+    required: [true, "Please enter your name"],
+    trim: true
+  },
+  email: {
+    type: String,
+    required: [true, "Please enter your email"],
+    // unique: true,
+    lowercase: true
+  },
+  password: {
+    type: String,
+    required: [true, "Please enter a password"],
+    minLength: [8, "Password must have at least 8 characters"],
+    select: false
+  },
+  phone: {
+    type: String,
+    required: [true, "Please enter your phone number"]
+  },
+  accountVerified: { type: Boolean, default: false },
+  verificationCode: String,
+  verificationCodeExpire: Date,
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+// const {email}=req.body;
+
+// Hash password before saving
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+
+// Compare password
+userSchema.methods.comparePassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// Generate verification code
+userSchema.methods.generateVerificationCode = function () {
+  const firstDigit = Math.floor(Math.random() * 9) + 1;
+  const remainingDigits = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, "0");
+
+  const verificationCode = parseInt(firstDigit + remainingDigits);
+
+  this.verificationCode = verificationCode;
+  this.verificationCodeExpire = Date.now() + 5 * 60 * 1000; // 5 min expiry
+
+  return verificationCode;
+};
+
+
+userSchema.methods.generateToken = async function () {
+  return jwt.sign({id:this._id}),process.env.JWT_SECRET_KEY,{
+    expiresIn:process.env.JWT_EXPIRE
+}
+}
+
+const User = mongoose.model("User", userSchema);
+export { User };
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++==
+
+
+
+
+
+// // 
+
+
+
+
+
+// import mongoose from 'mongoose';
+// import bcrypt from 'bcryptjs';
+// import jwt from 'jsonwebtoken';
+
+// const userSchema = new mongoose.Schema({
+//   user: {
+//     type: String,
+//     required: true,
+//   },
+//   email: {
+//     type: String,
+//     required: true,
+//     unique: true,
+//   },
+//   phone: {
+//     type: String,
+//     required: true,
+//     unique: true,
+//   },
+//   password: {
+//     type: String,
+//     required: true,
+//     select: false, // Hide by default
+//   },
+//   verificationCode: {
+//     type: Number,
+//     select: false, // Must select manually
+//   },
+//   verificationCodeExpire: {
+//     type: Date,
+//     select: false,
+//   },
+//   accountVerified: {
+//     type: Boolean,
+//     default: false,
+//   }
+// }, {
+//   timestamps: true
+// });
+
+
+// // ✅ METHOD: Generate OTP and expiry
+// userSchema.methods.generateVerificationCode = function () {
+//   const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
+//   this.verificationCode = otp;
+//   this.verificationCodeExpire = Date.now() + 10 * 60 * 1000; // Expires in 10 minutes
+//   return otp;
+// };
+
+
+// // ✅ METHOD: Compare password (optional but common)
+// userSchema.methods.comparePassword = async function (enteredPassword) {
+//   return await bcrypt.compare(enteredPassword, this.password);
+// };
+
+// // ✅ METHOD: Generate JWT token
+// userSchema.methods.generateJWT = function () {
+//   return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
+//     expiresIn: "7d"
+//   });
+// };
+
+// export const User = mongoose.model("User", userSchema);
+// 
+
+
+
+
+
+
+
+
+
+import mongoose from "mongoose";
+import bcrypt from "bcrypt";
+// import {User} from "../models/userModel.js"
+import register from "../controllers/userController.js" 
+import jwt from "jsonwebtoken";
+
+const userSchema = new mongoose.Schema(
+  {
+  user: {
+    type: String,
+    required: [true, "Please enter your name"],
+    trim: true
+  },
+  email: {
+    type: String,
+    required: [true, "Please enter your email"],
+    // unique: true,
+    lowercase: true
+  },
+  phone: {
+    type: String,
+    required: [true, "Please enter your phone number"]
+  },
+  accountVerified: { type: Boolean, default: false },
+  verificationCode: String,
+  verificationCodeExpire: Date,
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+// const {email}=req.body;
+
+// Hash password before saving
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+
+// Compare password
+userSchema.methods.comparePassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// Generate verification code
+userSchema.methods.generateVerificationCode = function () {
+  const firstDigit = Math.floor(Math.random() * 9) + 1;
+  const remainingDigits = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, "0");
+
+  const verificationCode = parseInt(firstDigit + remainingDigits);
+
+  this.verificationCode = verificationCode;
+  this.verificationCodeExpire = Date.now() + 5 * 60 * 1000; // 5 min expiry
+
+  return verificationCode;
+};
+
+
+// userSchema.methods.generateToken = async function () {
+//   return jwt.sign({id:this._id}),process.env.JWT_SECRET_KEY,{
+//     expiresIn:process.env.JWT_EXPIRE
+// }
+// }
+
+
+userSchema.methods.generateToken = async function () {
+  return jwt.sign(
+    { id: this._id },                 // payload
+    process.env.JWT_SECRET_KEY,       // secret
+    { expiresIn: process.env.JWT_EXPIRE } // options
+  );
+};
+
+
+
+
+
+// console.log("OTP in DB:", user.verificationCode);
+// console.log("OTP from request:", req.body.otp);
+
+const User = mongoose.model("User", userSchema);
+export { User };
